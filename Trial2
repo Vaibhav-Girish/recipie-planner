@@ -1,0 +1,264 @@
+import customtkinter as ctk
+import mysql.connector
+from tkinter import messagebox
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+
+class DatabaseManager:
+    def __init__(self):
+        self.connection = None
+        self.connect_database()
+        self.create_tables()
+
+    def connect_database(self):
+        try:
+            self.connection = mysql.connector.connect(
+                host='localhost',
+                database='recipe_planner',
+                user='root',
+                password='root'
+            )
+        except Exception as e:
+            messagebox.showerror("Database Error", f"Connection failed: {e}")
+
+    def create_tables(self):
+        if not self.connection:
+            return
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recipes (
+                recipe_id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                ingredients TEXT NOT NULL,
+                instructions TEXT NOT NULL,
+                category VARCHAR(100) NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mealplan (
+                plan_id INT AUTO_INCREMENT PRIMARY KEY,
+                day VARCHAR(20) NOT NULL,
+                meal_type VARCHAR(20) NOT NULL,
+                recipe_id INT,
+                FOREIGN KEY (recipe_id) REFERENCES recipes(recipe_id) ON DELETE CASCADE
+            )
+        """)
+        self.connection.commit()
+        cursor.close()
+
+    def insert_recipe(self, name, ingredients, instructions, category):
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "INSERT INTO recipes (name, ingredients, instructions, category) VALUES (%s, %s, %s, %s)",
+            (name, ingredients, instructions, category)
+        )
+        self.connection.commit()
+        cursor.close()
+        return True
+
+    def get_all_recipes(self):
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT * FROM recipes")
+        result = cursor.fetchall()
+        cursor.close()
+        return result
+
+    def delete_recipe(self, recipe_id):
+        cursor = self.connection.cursor()
+        cursor.execute("DELETE FROM recipes WHERE recipe_id = %s", (recipe_id,))
+        self.connection.commit()
+        cursor.close()
+        return True
+
+    def add_meal_plan(self, day, meal_type, recipe_id):
+        cursor = self.connection.cursor()
+        cursor.execute("DELETE FROM mealplan WHERE day = %s AND meal_type = %s", (day, meal_type))
+        cursor.execute("INSERT INTO mealplan (day, meal_type, recipe_id) VALUES (%s, %s, %s)",
+                       (day, meal_type, recipe_id))
+        self.connection.commit()
+        cursor.close()
+        return True
+
+    def get_meal_plan(self):
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT mp.day, mp.meal_type, r.name
+            FROM mealplan mp
+            JOIN recipes r ON mp.recipe_id = r.recipe_id
+            ORDER BY FIELD(mp.day, 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'),
+                     FIELD(mp.meal_type, 'Breakfast', 'Lunch', 'Dinner')
+        """)
+        result = cursor.fetchall()
+        cursor.close()
+        return result
+
+    def get_shopping_list(self):
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT DISTINCT r.ingredients
+            FROM mealplan mp
+            JOIN recipes r ON mp.recipe_id = r.recipe_id
+        """)
+        results = cursor.fetchall()
+        cursor.close()
+
+        all_ingredients = []
+        for result in results:
+            for ingredient in result[0].split(','):
+                ingredient = ingredient.strip()
+                if ingredient and ingredient not in all_ingredients:
+                    all_ingredients.append(ingredient)
+        return sorted(all_ingredients)
+
+
+class RecipePlannerApp:
+    def __init__(self):
+        self.root = ctk.CTk()
+        self.root.title("Recipe Planner")
+        self.root.geometry("1000x700")
+        self.db = DatabaseManager()
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Sidebar
+        sidebar = ctk.CTkFrame(self.root, width=180)
+        sidebar.pack(side="left", fill="y", padx=10, pady=10)
+        sidebar.pack_propagate(False)
+
+        ctk.CTkLabel(sidebar, text="Recipe Planner", font=("Arial", 18, "bold")).pack(pady=20)
+        ctk.CTkButton(sidebar, text="Recipes", command=self.show_recipes, height=40).pack(pady=5, padx=10, fill="x")
+        ctk.CTkButton(sidebar, text="Meal Plan", command=self.show_meal_plan, height=40).pack(pady=5, padx=10, fill="x")
+        ctk.CTkButton(sidebar, text="Shopping List", command=self.show_shopping, height=40).pack(pady=5, padx=10,
+                                                                                                 fill="x")
+
+        # Content area
+        self.content = ctk.CTkFrame(self.root)
+        self.content.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+        self.show_recipes()
+
+    def clear_content(self):
+        for widget in self.content.winfo_children():
+            widget.destroy()
+
+    def show_recipes(self):
+        self.clear_content()
+        ctk.CTkLabel(self.content, text="Recipe Manager", font=("Arial", 22, "bold")).pack(pady=15)
+
+        # Add Recipe Form
+        form = ctk.CTkFrame(self.content)
+        form.pack(fill="x", padx=20, pady=10)
+
+        ctk.CTkLabel(form, text="Recipe Name:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.name_entry = ctk.CTkEntry(form, width=300)
+        self.name_entry.grid(row=0, column=1, padx=10, pady=5)
+
+        ctk.CTkLabel(form, text="Ingredients:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.ingredients_box = ctk.CTkTextbox(form, width=300, height=80)
+        self.ingredients_box.grid(row=1, column=1, padx=10, pady=5)
+
+        ctk.CTkLabel(form, text="Instructions:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.instructions_box = ctk.CTkTextbox(form, width=300, height=100)
+        self.instructions_box.grid(row=2, column=1, padx=10, pady=5)
+
+        ctk.CTkLabel(form, text="Category:").grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.category_combo = ctk.CTkComboBox(form, values=["Breakfast", "Lunch", "Dinner", "Snack"], width=300)
+        self.category_combo.grid(row=3, column=1, padx=10, pady=5)
+
+        ctk.CTkButton(form, text="Save Recipe", command=self.save_recipe).grid(row=4, column=1, pady=10)
+
+        # Recipe List
+        list_frame = ctk.CTkScrollableFrame(self.content)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        for recipe in self.db.get_all_recipes():
+            recipe_frame = ctk.CTkFrame(list_frame)
+            recipe_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(recipe_frame, text=f"{recipe[1]} ({recipe[4]})", font=("Arial", 14, "bold")).pack(side="left",
+                                                                                                           padx=10)
+            ctk.CTkButton(recipe_frame, text="Delete", fg_color="red", width=70,
+                          command=lambda r=recipe: self.delete_recipe(r)).pack(side="right", padx=5)
+
+    def save_recipe(self):
+        name = self.name_entry.get().strip()
+        ingredients = self.ingredients_box.get("1.0", "end").strip()
+        instructions = self.instructions_box.get("1.0", "end").strip()
+        category = self.category_combo.get()
+
+        if not all([name, ingredients, instructions]):
+            messagebox.showerror("Error", "Fill all fields!")
+            return
+
+        self.db.insert_recipe(name, ingredients, instructions, category)
+        messagebox.showinfo("Success", "Recipe saved!")
+        self.show_recipes()
+
+    def delete_recipe(self, recipe):
+        if messagebox.askyesno("Confirm", f"Delete '{recipe[1]}'?"):
+            self.db.delete_recipe(recipe[0])
+            self.show_recipes()
+
+    def show_meal_plan(self):
+        self.clear_content()
+        ctk.CTkLabel(self.content, text="Meal Planner", font=("Arial", 22, "bold")).pack(pady=15)
+
+        # Planning Form
+        form = ctk.CTkFrame(self.content)
+        form.pack(fill="x", padx=20, pady=10)
+
+        ctk.CTkLabel(form, text="Day:").grid(row=0, column=0, padx=10, pady=10)
+        self.day_var = ctk.CTkComboBox(form, values=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+                                                     "Sunday"])
+        self.day_var.grid(row=0, column=1, padx=10, pady=10)
+
+        ctk.CTkLabel(form, text="Meal:").grid(row=0, column=2, padx=10, pady=10)
+        self.meal_var = ctk.CTkComboBox(form, values=["Breakfast", "Lunch", "Dinner"])
+        self.meal_var.grid(row=0, column=3, padx=10, pady=10)
+
+        recipes = self.db.get_all_recipes()
+        recipe_names = [f"{r[1]} (ID:{r[0]})" for r in recipes]
+
+        ctk.CTkLabel(form, text="Recipe:").grid(row=1, column=0, padx=10, pady=10)
+        self.recipe_var = ctk.CTkComboBox(form, values=recipe_names, width=300)
+        self.recipe_var.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
+
+        ctk.CTkButton(form, text="Add to Plan", command=self.add_meal).grid(row=1, column=3, padx=10, pady=10)
+
+        # Display Plan
+        plan_frame = ctk.CTkScrollableFrame(self.content)
+        plan_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        for day, meal, recipe_name in self.db.get_meal_plan():
+            meal_frame = ctk.CTkFrame(plan_frame)
+            meal_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(meal_frame, text=f"{day} - {meal}: {recipe_name}").pack(side="left", padx=10)
+
+    def add_meal(self):
+        try:
+            recipe_id = int(self.recipe_var.get().split("ID:")[1].split(")")[0])
+            self.db.add_meal_plan(self.day_var.get(), self.meal_var.get(), recipe_id)
+            messagebox.showinfo("Success", "Added to meal plan!")
+            self.show_meal_plan()
+        except:
+            messagebox.showerror("Error", "Select a valid recipe!")
+
+    def show_shopping(self):
+        self.clear_content()
+        ctk.CTkLabel(self.content, text="Shopping List", font=("Arial", 22, "bold")).pack(pady=15)
+
+        list_frame = ctk.CTkScrollableFrame(self.content)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        ingredients = self.db.get_shopping_list()
+        for i, ingredient in enumerate(ingredients, 1):
+            ctk.CTkLabel(list_frame, text=f"{i}. {ingredient}", font=("Arial", 13)).pack(anchor="w", padx=20, pady=3)
+
+    def run(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    app = RecipePlannerApp()
+    app.run()
